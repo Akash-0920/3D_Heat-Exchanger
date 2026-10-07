@@ -45,5 +45,4 @@ Other free options: Netlify Drop (drag the file onto app.netlify.com/drop), Clou
 ## Tech
 Plain HTML, CSS and JavaScript with [three.js](https://threejs.org) r128 (CDN). No dependencies to install.
 
-## Licence
-MIT. Add a `LICENSE` file before publishing.
+
