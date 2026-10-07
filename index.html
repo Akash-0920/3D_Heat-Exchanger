@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Heat Exchanger 3D Designer</title>
+<style>
+:root{--bg:#f4f5f7;--fg:#1c1f24;--card:#fffffff0;--bd:#8886;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#14171c;--fg:#e8eaed;--card:#222831f0}}
+:root[data-theme="dark"]{--bg:#14171c;--fg:#e8eaed;--card:#222831f0}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,Segoe UI,sans-serif;overflow:hidden}
+canvas{display:block;touch-action:none}
+#p{position:fixed;left:10px;top:calc(10px + env(safe-area-inset-top,0px));width:260px;max-height:calc(100% - 30px);overflow:auto;background:var(--card);border-radius:10px;padding:10px;font-size:13px;box-shadow:0 2px 12px #0003}
+#p h3{margin:0 0 8px;font-size:15px}
+#p label{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:5px 0}
+#p select{width:132px}#p input,#p select{max-width:132px;width:95px;padding:4px;border:1px solid var(--bd);border-radius:5px;background:transparent;color:var(--fg);font:inherit}
+#p select option{color:#111}
+#p .s{margin:10px 0 2px;font-weight:600;opacity:.7;font-size:12px;text-transform:uppercase}
+#p .feed{border:2px solid;border-radius:8px;margin:0 0 10px;padding:0 8px 6px}
+#p .fh{color:#fff;font-weight:700;font-size:12px;letter-spacing:.5px;margin:0 -8px 4px;padding:5px 8px;border-radius:5px 5px 0 0}
+#note{font-size:12px;color:#c0392b;margin-top:6px;min-height:14px}
+#desc{font-size:12px;opacity:.75;margin:2px 0 4px}
+#res{margin-top:8px;padding-top:8px;border-top:1px solid var(--bd);line-height:1.6}
+#res b{float:right}
+button{font:inherit;padding:5px 10px;border-radius:6px;border:1px solid var(--bd);background:transparent;color:var(--fg);cursor:pointer;margin:6px 4px 0 0}
+@media (max-width:600px){#p{left:0;right:0;top:auto;bottom:0;width:auto;max-height:45%;border-radius:12px 12px 0 0;padding-bottom:calc(10px + env(safe-area-inset-bottom,0px))}}
+</style></head><body>
+<div id="p"><h3>Shell &amp; Tube HX Designer</h3><div id="feed"></div><div id="f"></div><div id="desc"></div>
+<button id="sh">Shell: transparent</button><button id="ar">Rotate: on</button><button id="stl" style="display:none">Export STL (zip)</button><button id="ds" style="display:none">Datasheet (HTML)</button>
+<div id="note"></div><div id="res"></div></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+const TYPES={BEM:'Fixed tubesheet, bonnet front & rear',AES:'Floating head, split-ring, removable',AET:'Pull-through floating head',BEU:'U-tube bundle, bonnet front'};
+const F=[['Type'],['tag','Exchanger tag','txt:E-101'],['type','TEMA type','sel:BEM,AES,AET,BEU'],['passes','Tube passes','sel:1,2,4,6'],
+['Shell'],['sid','Shell ID (mm)',600],['tl','Tube length (mm)',4000],['sn','Shell nozzle ID (mm)',150],['nzs','Shell nozzle orient.','sel:Top in / Bottom out,Bottom in / Top out,Top / Top,Side / Side'],
+['Tubes'],['od','Tube OD (mm)',25.4],['wall','Tube wall (mm)',2.11],['pt','Pitch (mm)',31.75],['lay','Layout','sel:Triangular,Square'],['clr','Bundle clearance (mm)',20],['lane','Pass lane (mm)',6],['tn','Tube nozzle ID (mm)',150],['nzt','Tube nozzle orient.','sel:Top in / Bottom out,Bottom in / Top out,Top / Top,Side / Side'],
+['Baffles'],['nb','No. of baffles',6],['cut','Baffle cut (%)',25]];
+F.forEach(f=>{if(f.length==1){$('f').insertAdjacentHTML('beforeend','<div class="s">'+f[0]+'</div>');return}
+ const [k,l,d]=f;let inp;
+ if(String(d).startsWith('sel:'))inp='<select id="'+k+'">'+d.slice(4).split(',').map(o=>'<option>'+o+'</option>').join('')+'</select>';
+ else if(String(d).startsWith('txt:'))inp='<input id="'+k+'" type="text" value="'+d.slice(4)+'">';
+ else inp='<input id="'+k+'" type="number" step="any" value="'+d+'">';
+ $('f').insertAdjacentHTML('beforeend','<label>'+l+inp+'</label>');
+ $(k).addEventListener('input',build)});
+$('passes').value='2';
+const FEED=[['tf','TUBE-SIDE FEED IN','#c0392b',['TUBE SIDE','Crude oil',100000,40,90,2.0,850]],['sf','SHELL-SIDE FEED IN','#e67e22',['SHELL SIDE','Gas oil',70000,170,110,2.4,780]]];
+const FF=[['nm','Side name','text'],['fl','Fluid','text'],['m','Flow (kg/h)'],['ti','Inlet T (°C)'],['to','Outlet T (°C)'],['cp','Cp (kJ/kg·K)'],['rho','Density (kg/m³)']];
+FEED.forEach(([id,title,col,d])=>{let h='<div class="feed" style="border-color:'+col+'"><div class="fh" id="'+id+'_h" style="background:'+col+'">▶ '+d[0].toUpperCase()+' FEED IN</div>';
+ FF.forEach((f,i)=>{h+='<label>'+f[1]+'<input id="'+id+'_'+f[0]+'" '+(f[2]=='text'?'type="text"':'type="number" step="any"')+' value="'+d[i]+'"></label>'});
+ $('feed').insertAdjacentHTML('beforeend',h+'</div>');
+ FF.forEach(f=>$(id+'_'+f[0]).addEventListener('input',f[0]=='fl'||f[0]=='nm'?build:results))});
+
+const renderer=new THREE.WebGLRenderer({antialias:true,alpha:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));document.body.appendChild(renderer.domElement);
+const scene=new THREE.Scene(),cam=new THREE.PerspectiveCamera(40,1,0.05,200);
+scene.add(new THREE.AmbientLight(0xffffff,0.7));
+const d1=new THREE.DirectionalLight(0xffffff,0.8);d1.position.set(5,8,6);scene.add(d1);
+const d2=new THREE.DirectionalLight(0xffffff,0.35);d2.position.set(-6,-3,-5);scene.add(d2);
+const M=(c,o={})=>new THREE.MeshStandardMaterial(Object.assign({color:c,metalness:0.5,roughness:0.45},o));
+const steel=M(0x8a97a6),dark=M(0x4a5563),fhM=M(0x9a6b2f),tubeM=M(0xffffff,{metalness:0.6,roughness:0.35}),uM=M(0xb87333,{metalness:0.7,roughness:0.3});
+const glass=()=>M(0x9fb3c8,{transparent:true,opacity:0.28,side:THREE.DoubleSide,depthWrite:false});
+const shellM=glass(),chanM=glass(),baffM=M(0x4a5563,{side:THREE.DoubleSide});
+const PAL=[0xe74c3c,0x3498db,0xf1c40f,0x2ecc71,0x9b59b6,0x1abc9c];
+let RES=[],TR=[],SR=[],GEO=null,G=null,r=10,th=0.7,ph=1.2,auto=true,drag=false,px,py,pd=0,built=0,ref=10;
+
+function build(){
+ const n=k=>Math.max(parseFloat($(k).value)||0,0);
+ const type=$('type').value;FEED.forEach(q=>$(q[0]+'_h').textContent='▶ '+$(q[0]+'_nm').value.toUpperCase()+' FEED IN');document.title=($('tag').value||'HX')+' - HX Designer';let N=parseInt($('passes').value);const note=[];
+ if(type!='BEM'&&N==1){N=2;$('passes').value='2';note.push(type+' needs even passes: set to 2.')}
+ if(type=='BEU'&&N>2){N=2;$('passes').value='2';note.push('U-tube modelled as 2 pass.')}
+ $('desc').textContent=type+' – '+TYPES[type];
+ const D=n('sid')/1000,L=n('tl')/1000,od=n('od')/1000,pt=n('pt')/1000,wall=n('wall')/1000,nb=Math.round(n('nb')),cut=Math.min(n('cut'),45)/100,sn=n('sn')/1000,tn=n('tn')/1000,tri=$('lay').value=='Triangular';
+ const clr=n('clr')/1000+({BEM:0,BEU:0,AES:0.03,AET:0.012})[type];
+ if(D<=0||L<=0||od<=0||pt<=od||wall*2>=od){$('note').textContent='Check inputs: pitch > OD, wall < OD/2, sizes > 0.';return}
+ if(G){G.traverse(o=>{if(o.isSprite){o.material.map.dispose();o.material.dispose()}else if(o.geometry)o.geometry.dispose()});scene.remove(G)}
+ G=new THREE.Group();scene.add(G);
+ const R=D/2,add=(m,x=0,y=0,z=0)=>{m.position.set(x,y,z);G.add(m);return m};
+ const cyl=(rad,l,m,vert,open)=>{const g=new THREE.Mesh(new THREE.CylinderGeometry(rad,rad,l,48,1,!!open),m);if(!vert)g.rotation.z=Math.PI/2;return g};
+ const dome=(rad,x,s,m)=>{const h=new THREE.Mesh(new THREE.SphereGeometry(rad,48,24,0,Math.PI*2,0,Math.PI/2),m||steel);h.rotation.z=-s*Math.PI/2;h.scale.y=0.55;add(h,x)};
+ const cl=Math.max(0.3,0.4*D),fl=Math.max(0.03,0.05*D),fl2=fl*0.8;
+ const float=type=='AES'||type=='AET',ext=float?0.55*R+0.1:0,x1=L/2+ext;
+ const sL=L+ext;
+ add(cyl(R,sL,shellM,false,true),ext/2);
+ // front channel (all types)
+ add(cyl(R+0.01,0.03+0.02*D,dark),-L/2);
+ add(cyl(R+fl*1.5,fl2,steel),-(L/2+fl*0.5));
+ add(cyl(R,cl,chanM,false,true),-(L/2+cl/2+fl*0.5));
+ add(cyl(R+fl*1.5,fl2,steel),-(L/2+cl+fl*0.5));
+ dome(R,-(L/2+cl+fl*0.9),-1);
+ // pass partition plates
+ const pw=0.008+0.005*D,plen=cl*0.95,px0=-(L/2+plen/2+0.02);
+ if(N>=2)add(new THREE.Mesh(new THREE.BoxGeometry(plen,pw,2*R*0.98),dark),px0);
+ if(N==4)add(new THREE.Mesh(new THREE.BoxGeometry(plen,2*R*0.98,pw),dark),px0);
+ if(N==6)[-1,1].forEach(s=>add(new THREE.Mesh(new THREE.BoxGeometry(plen,2*R*0.9,pw),dark),px0,0,s*R/3));
+ // rear end
+ let rx=L/2,rcl=0;
+ if(type=='BEM'){
+  add(cyl(R+0.01,0.03+0.02*D,dark),L/2);add(cyl(R+fl*1.5,fl2,steel),L/2+fl*0.5);
+  add(cyl(R,cl,chanM,false,true),L/2+cl/2+fl*0.5);add(cyl(R+fl*1.5,fl2,steel),L/2+cl+fl*0.5);
+  dome(R,L/2+cl+fl*0.9,1);rcl=cl+fl;
+ }else if(type=='BEU'){
+  add(cyl(R+fl*1.5,fl2,steel),L/2+fl*0.4);dome(R,L/2+fl*0.7,1);rcl=fl;
+ }else{
+  const Rc=R*(type=='AES'?1.1:1.22),cv=0.3*D;
+  add(cyl(R+fl*1.5,fl2,steel),x1);add(cyl(Rc,cv,chanM,false,true),x1+cv/2);
+  add(cyl(Rc+fl,fl2,steel),x1+cv);dome(Rc,x1+cv+fl*0.3,1);
+  add(cyl(R*0.97,0.05,dark),L/2);                         // floating tubesheet
+  if(type=='AES')add(cyl(R*0.99,0.04,steel),L/2+0.07);    // split ring
+  dome(R*0.95,L/2+0.05,1,fhM);                            // floating head cover
+  rcl=ext+cv+fl;
+ }
+ // tube layout
+ const LN=n('lane')/2000,Rb=R-clr-od/2,pts=[],dy=tri?pt*Math.sin(Math.PI/3):pt,m=Math.ceil(Rb/Math.min(dy,pt))+1;
+ for(let i=-m;i<=m;i++)for(let j=-m;j<=m;j++){
+  const y=i*dy,z=j*pt+(tri&&i%2?pt/2:0);
+  const bad=N>=2&&Math.abs(y)<LN||(N==4&&Math.abs(z)<LN)||(N==6&&Math.abs(Math.abs(z)-R/3)<LN);
+  if(Math.hypot(y,z)<=Rb&&!bad&&!(type=='BEU'&&i==0))pts.push([y,z])}
+ let total=pts.length,shown=0;
+ const zone=(y,z)=>N==1?0:N==2?(y>=0?0:1):N==4?(y>=0?0:1)+(z>=0?2:0):(y>=0?0:1)+2*(z<-R/3?0:z<R/3?1:2);
+ if(type!='BEU'){
+  const cap=3000,use=pts.slice(0,cap);shown=use.length;
+  const tg=new THREE.CylinderGeometry(od/2,od/2,L,10);tg.rotateZ(Math.PI/2);
+  const im=new THREE.InstancedMesh(tg,tubeM,Math.max(use.length,1)),mt=new THREE.Matrix4(),c=new THREE.Color();
+  use.forEach((p,i)=>{mt.makeTranslation(0,p[0],p[1]);im.setMatrixAt(i,mt);im.setColorAt(i,c.setHex(PAL[zone(p[0],p[1])]))});
+  im.count=use.length;G.add(im);
+ }else{
+  const pairs=pts.filter(p=>p[0]>1e-6),cap=250;shown=Math.min(pairs.length,cap)*2;total=pairs.length*2;
+  pairs.slice(0,cap).forEach(([y,z])=>{
+   const cx=L/2-y,p=new THREE.CurvePath();
+   p.add(new THREE.LineCurve3(new THREE.Vector3(-L/2,y,z),new THREE.Vector3(cx,y,z)));
+   class A extends THREE.Curve{getPoint(t){const a=Math.PI/2-Math.PI*t;return new THREE.Vector3(cx+y*Math.cos(a),y*Math.sin(a),z)}}
+   p.add(new A());
+   p.add(new THREE.LineCurve3(new THREE.Vector3(cx,-y,z),new THREE.Vector3(-L/2,-y,z)));
+   add(new THREE.Mesh(new THREE.TubeGeometry(p,36,od/2,6,false),uM))});
+ }
+ // baffles
+ const sp=L/(nb+1),y0=R-2*R*cut,s0=Math.asin(Math.max(-1,Math.min(1,y0/R))),sh=new THREE.Shape();
+ for(let k=0;k<=48;k++){const t=Math.PI-s0+(Math.PI+2*s0)*k/48,x=R*0.985*Math.cos(t),y=R*0.985*Math.sin(t);k?sh.lineTo(x,y):sh.moveTo(x,y)}
+ for(let i=1;i<=nb;i++){
+  const g=new THREE.ExtrudeGeometry(sh,{depth:0.012+0.01*D,bevelEnabled:false});g.rotateY(Math.PI/2);
+  const b=new THREE.Mesh(g,baffM);if(i%2==0)b.scale.y=-1;add(b,-L/2+i*sp)}
+ // nozzles
+ const ANG={'Top in / Bottom out':[0,Math.PI],'Bottom in / Top out':[Math.PI,0],'Top / Top':[0,0],'Side / Side':[Math.PI/2,-Math.PI/2]};
+ const nm=id=>$(id+'_fl').value,SN=id=>$(id+'_nm').value.toUpperCase();
+ const lab=(t,col,x,y,z)=>{const c=document.createElement('canvas');c.width=512;c.height=96;const g=c.getContext('2d');g.fillStyle=col;g.beginPath();if(g.roundRect)g.roundRect(4,4,504,88,18);else g.rect(4,4,504,88);g.fill();g.fillStyle='#fff';g.font='bold 38px Arial';g.textAlign='center';g.textBaseline='middle';g.fillText(t,256,50,490);
+  const spr=new THREE.Sprite(new THREE.SpriteMaterial({map:new THREE.CanvasTexture(c),depthTest:false,transparent:true})),w=D*1.1+0.4;spr.scale.set(w,w*96/512,1);spr.position.set(x,y,z);spr.renderOrder=10;G.add(spr)};
+ const noz=(x,a,col,id,tx)=>{if(id<=0)return;const len=Math.max(0.12,id*1.1),c=M(col,{metalness:0.3}),u=Math.cos(a),w=Math.sin(a);
+  const q=cyl(id/2+0.01,len,c,true);q.rotation.x=a;add(q,x,u*(R+len/2-0.03),w*(R+len/2-0.03));
+  const f=cyl(id/2+0.04,0.03,steel,true);f.rotation.x=a;add(f,x,u*(R+len-0.02),w*(R+len-0.02));if(tx){const e=R+len+0.14*D;lab(tx,col,x,u*e,w*e)}};
+ const sx=Math.min(L/2-0.15,Math.max(sp/2,0.3));
+ const as=ANG[$('nzs').value],at=ANG[$('nzt').value];
+ noz(-L/2+sx,as[0],0xe67e22,sn,'▶ '+SN('sf')+' FEED IN: '+nm('sf'));noz(L/2-sx,as[1],0x16a085,sn,SN('sf')+' OUT');
+ const fx=-(L/2+cl/2+fl),off=(N>1&&at[0]==at[1])?tn*0.6+0.05:0;
+ noz(fx-off,at[0],0xc0392b,tn,'▶ '+SN('tf')+' FEED IN: '+nm('tf'));
+ if(N==1)noz(L/2+cl/2+fl,at[1],0x2980b9,tn,SN('tf')+' OUT');else noz(fx+off,at[1],0x2980b9,tn,SN('tf')+' OUT');
+ // saddles
+ [-0.7,0.7].forEach(f=>{const x=f*L/2*0.8,h=0.3*D+0.05;
+  add(new THREE.Mesh(new THREE.BoxGeometry(0.1+0.1*D,h,D*0.8),dark),x,-R-h/2+0.02);
+  add(new THREE.Mesh(new THREE.BoxGeometry(0.3+0.15*D,0.03,D*1.0),dark),x,-R-h)});
+ const oldRef=ref;ref=Math.max(L+cl+rcl,D)*1.5;if(!built||ref>oldRef*1.3||ref<oldRef*0.7){r=ref;built=1}
+ const di=od-2*wall,area=total*Math.PI*od*L,B=sp;
+ const rows0=[['Tubes',total],['Heat transfer area',area.toFixed(1)+' m²'],['Tube-side flow area / pass',(total/N*Math.PI/4*di*di*1e4).toFixed(0)+' cm²'],
+  ['Shell cross-flow area',(D*B*(pt-od)/pt*1e4).toFixed(0)+' cm²'],['Baffle spacing',(sp*1000).toFixed(0)+' mm'],['Bundle OD',(2*(Rb+od/2)*1000).toFixed(0)+' mm'],
+  ['Overall length',((L+cl+fl+rcl)*1000).toFixed(0)+' mm'],['L/D',(L/D).toFixed(1)]];
+ GEO={total,area,N,di,D,B,pt,od,rows:rows0,note:note.join(' ')+(shown<total?' Display capped ('+shown+' of '+total+' tubes).':'')};results();
+}
+function results(){if(!GEO)return;const g=GEO,v=k=>parseFloat($(k).value)||0,warn=[];
+ const S=id=>({fl:$(id+'_fl').value,m:v(id+'_m')/3600,ti:v(id+'_ti'),to:v(id+'_to'),cp:v(id+'_cp'),rho:v(id+'_rho')});
+ const t=S('tf'),s=S('sf'),Qt=t.m*t.cp*Math.abs(t.to-t.ti),Qs=s.m*s.cp*Math.abs(s.to-s.ti);
+ const Af=g.total/g.N*Math.PI/4*g.di*g.di,Sf=g.D*g.B*(g.pt-g.od)/g.pt;
+ const vt=t.rho>0?t.m/(t.rho*Af):0,vs=s.rho>0?s.m/(s.rho*Sf):0,bal=Math.max(Qt,Qs)>0?(Qt-Qs)/Math.max(Qt,Qs)*100:0;
+ const hot=t.ti>s.ti?[t,s]:[s,t],d1=hot[0].ti-hot[1].to,d2=hot[0].to-hot[1].ti;
+ const lm=d1>0&&d2>0?(Math.abs(d1-d2)<1e-6?d1:(d1-d2)/Math.log(d1/d2)):0,Q=(Qt+Qs)/2,U=lm>0&&g.area>0?Q*1000/(g.area*lm):0;
+ if(Math.abs(bal)>5)warn.push('Duty mismatch '+bal.toFixed(1)+'%.');
+ if(!lm)warn.push('Temperature cross/invalid: LMTD n/a.');
+ const fr=(x,vel,Q)=>[['Fluid',x.fl],['Flow',(x.m*3600).toFixed(0)+' kg/h'],['Inlet T',x.ti+' °C'],['Outlet T',x.to+' °C'],['Cp',x.cp+' kJ/kg·K'],['Density',x.rho+' kg/m³'],['Duty',Q.toFixed(0)+' kW'],['Velocity',vel.toFixed(2)+' m/s']];
+ TR=fr(t,vt,Qt);SR=fr(s,vs,Qs);
+ RES=g.rows.concat([['Duty tube / shell',Qt.toFixed(0)+' / '+Qs.toFixed(0)+' kW'],['Duty imbalance',bal.toFixed(1)+' %'],['Tube velocity',vt.toFixed(2)+' m/s'],['Shell cross-flow vel.',vs.toFixed(2)+' m/s'],['LMTD (counter, F=1)',lm?lm.toFixed(1)+' °C':'n/a'],['Required U (F=1)',U?U.toFixed(0)+' W/m²K':'n/a']]);
+ $('res').innerHTML=RES.map(q=>'<div>'+q[0]+'<b>'+q[1]+'</b></div>').join('');
+ $('note').textContent=(g.note+' '+warn.join(' ')).trim()
+}
+
+// ---- STL export (binary STL inside a stored zip) ----
+function stlBytes(){
+ G.updateMatrixWorld(true);const tris=[],mat=new THREE.Matrix4(),v=[new THREE.Vector3(),new THREE.Vector3(),new THREE.Vector3()];
+ G.traverse(o=>{if(!o.isMesh)return;const g=o.geometry,pos=g.attributes.position,idx=g.index,cnt=o.isInstancedMesh?o.count:1,tm=new THREE.Matrix4();
+  const nt=idx?idx.count/3:pos.count/3;
+  for(let k=0;k<cnt;k++){mat.copy(o.matrixWorld);if(o.isInstancedMesh){o.getMatrixAt(k,tm);mat.multiply(tm)}
+   for(let t=0;t<nt;t++){for(let q=0;q<3;q++){const i=idx?idx.getX(t*3+q):t*3+q;v[q].fromBufferAttribute(pos,i).applyMatrix4(mat)}
+    tris.push(v.map(a=>[a.x*1000,-a.z*1000,a.y*1000]))}}});
+ const buf=new ArrayBuffer(84+50*tris.length),dv=new DataView(buf);dv.setUint32(80,tris.length,true);let o=84;
+ const A=new THREE.Vector3(),B=new THREE.Vector3(),C=new THREE.Vector3();
+ tris.forEach(t=>{A.fromArray(t[0]);B.fromArray(t[1]);C.fromArray(t[2]);const nrm=B.sub(A).cross(C.sub(A)).normalize();
+  [nrm.x,nrm.y,nrm.z].forEach(x=>{dv.setFloat32(o,isFinite(x)?x:0,true);o+=4});
+  t.forEach(p=>p.forEach(x=>{dv.setFloat32(o,x,true);o+=4}));o+=2});
+ return new Uint8Array(buf)}
+const CT=(()=>{const t=[];for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=c&1?0xEDB88320^(c>>>1):c>>>1;t.push(c>>>0)}return t})();
+function crc32(u){let c=-1;for(let i=0;i<u.length;i++)c=CT[(c^u[i])&255]^(c>>>8);return(c^-1)>>>0}
+function zip(name,data){const nb=new TextEncoder().encode(name),n=nb.length,s=data.length,crc=crc32(data),b=new Uint8Array(30+n+s+46+n+22),d=new DataView(b.buffer);
+ let o=0;const w2=x=>{d.setUint16(o,x,true);o+=2},w4=x=>{d.setUint32(o,x,true);o+=4};
+ w4(0x04034b50);w2(20);w2(0);w2(0);w2(0);w2(33);w4(crc);w4(s);w4(s);w2(n);w2(0);b.set(nb,o);o+=n;b.set(data,o);o+=s;
+ w4(0x02014b50);w2(20);w2(20);w2(0);w2(0);w2(0);w2(33);w4(crc);w4(s);w4(s);w2(n);w2(0);w2(0);w2(0);w2(0);w4(0);w4(0);b.set(nb,o);o+=n;
+ w4(0x06054b50);w2(0);w2(0);w2(1);w2(1);w4(46+n);w4(30+n+s);w2(0);return b}
+function sheet(){const ty=$('type').value,inp=F.filter(f=>f.length>1).map(f=>[f[1],$(f[0]).value]);
+ const t=(h,rows)=>'<h2>'+h+'</h2><table>'+rows.map(q=>'<tr><td>'+q[0]+'</td><td>'+q[1]+'</td></tr>').join('')+'</table>';
+ return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>HX Datasheet</title><style>body{font-family:Arial,sans-serif;max-width:720px;margin:24px auto;color:#111}h1{font-size:20px;border-bottom:2px solid #111}h2{font-size:14px;margin:18px 0 4px;background:#eee;padding:4px}table{width:100%;border-collapse:collapse;font-size:13px}td{border:1px solid #bbb;padding:4px 8px}td:first-child{width:55%}</style></head><body><h1>Shell &amp; Tube Heat Exchanger - Geometry Datasheet</h1>'
+ +t('General',[['Exchanger tag',$('tag').value],['TEMA type',ty+' - '+TYPES[ty]],['Tube passes',$('passes').value],['Date',new Date().toISOString().slice(0,10)]])+t($('tf_nm').value+' (tube side) - FEED IN',TR)+t($('sf_nm').value+' (shell side) - FEED IN',SR)+t('Input geometry',inp)+t('Calculated',RES)
+ +'<p style="font-size:11px">Geometry only. No thermal or mechanical design; verify per TEMA/ASME.</p></body></html>'}
+let dls=null;const saveFile=(name,data)=>{if(dls)return dls.save({filename:name,data});const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([data]));a.download=name;document.body.appendChild(a);a.click();a.remove();return Promise.resolve()};
+if(window.claude&&claude.use)claude.use('downloads').then(d=>{if(d){dls=d;$('stl').style.display='';$('ds').style.display=''}}).catch(()=>{})
+else{$('stl').style.display='';$('ds').style.display=''}
+$('stl').onclick=async()=>{const nm=($('tag').value||'HX').replace(/[^\w-]+/g,'_')+'_'+$('type').value;
+ try{$('note').textContent='Building STL…';await new Promise(r=>setTimeout(r,20));
+  await saveFile(nm+'.zip',zip(nm+'.stl',stlBytes()));$('note').textContent='STL saved (mm, Z-up, surface model).'}
+ catch(e){$('note').textContent=e&&e.code=='declined'?'Export cancelled.':'Export failed: '+((e&&e.message)||e)}};
+
+$('ds').onclick=async()=>{try{await saveFile('HX_datasheet_'+($('tag').value||'HX').replace(/[^\w-]+/g,'_')+'.html',sheet());$('note').textContent='Datasheet saved.'}
+ catch(e){$('note').textContent=e&&e.code=='declined'?'Export cancelled.':'Export failed: '+((e&&e.message)||e)}};
+// ---- view ----
+const el=renderer.domElement,clampR=v=>Math.min(ref*3,Math.max(ref*0.25,v));
+el.addEventListener('pointerdown',e=>{drag=true;px=e.clientX;py=e.clientY;el.setPointerCapture(e.pointerId)});
+el.addEventListener('pointerup',()=>drag=false);
+el.addEventListener('pointermove',e=>{if(!drag)return;th-=(e.clientX-px)*0.008;ph=Math.min(3,Math.max(0.15,ph-(e.clientY-py)*0.008));px=e.clientX;py=e.clientY});
+el.addEventListener('wheel',e=>{e.preventDefault();r=clampR(r*(1+e.deltaY*0.001))},{passive:false});
+el.addEventListener('touchmove',e=>{if(e.touches.length==2){const d=Math.hypot(e.touches[0].clientX-e.touches[1].clientX,e.touches[0].clientY-e.touches[1].clientY);if(pd)r=clampR(r*pd/d);pd=d}},{passive:true});
+el.addEventListener('touchend',()=>pd=0);
+function size(){renderer.setSize(innerWidth,innerHeight);cam.aspect=innerWidth/innerHeight;cam.updateProjectionMatrix()}
+addEventListener('resize',size);size();build();
+(function loop(){requestAnimationFrame(loop);if(auto&&!drag)th+=0.004;
+ cam.position.set(r*Math.sin(ph)*Math.cos(th),r*Math.cos(ph),r*Math.sin(ph)*Math.sin(th));cam.lookAt(0,0,0);renderer.render(scene,cam)})();
+let tr=true;
+$('sh').onclick=()=>{tr=!tr;[shellM,chanM].forEach(m=>{m.opacity=tr?0.28:1;m.transparent=tr;m.depthWrite=!tr;m.needsUpdate=true});$('sh').textContent='Shell: '+(tr?'transparent':'solid')};
+$('ar').onclick=()=>{auto=!auto;$('ar').textContent='Rotate: '+(auto?'on':'off')};
+</script></body></html>
